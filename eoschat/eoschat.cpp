@@ -14,6 +14,7 @@ namespace eoschat {
 
         //@abi action
         void signup(account_name account, std::string& username) {
+            eosio_assert( is_account( account ), "Account does not exist");
             require_auth(account);
 
             user_index users(_self, scope_account);
