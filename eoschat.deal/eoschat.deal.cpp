@@ -58,33 +58,55 @@ namespace eoschat {
             auto it = deals.find(multisig);
             eosio_assert(it == deals.end(), "Multisig account reuse");
 
-            deals.emplace(scope_account, [&](auto& deal) {
-                deal = {initiator,
-                        executor,
-                        quantity,
-                        conditions,
-                        multisig,
-                        escrow_agent};
-            });
-
             action proposed_trx_action(
                     permission_level{multisig, N(active)},
                     N(eosio.token),
                     N(transfer),
                     currency::transfer{multisig, executor, quantity, ""});
 
-            transaction trx(time_point_sec(now() + 2592000));
+            transaction trx(time_point_sec(now() + deal_proposal_duration));
             trx.actions.push_back(std::move(proposed_trx_action));
+
+            name proposal_name{multisig};
+
+            deals.emplace(scope_account, [&](auto& deal) {
+                deal = {initiator,
+                        executor,
+                        quantity,
+                        conditions,
+                        multisig,
+                        escrow_agent,
+                        proposal_name};
+            });
 
             dispatch_inline(
                     N(eosio.msig),
                     N(propose),
                     std::vector<permission_level>{{initiator, N(active)}},
-                    std::make_tuple(initiator,
-                    name{multisig},
-                    std::vector<permission_level>{{multisig, N(active)}},
-                    trx)
-                    );
+                    std::make_tuple(
+                            initiator,
+                            proposal_name,
+                            std::vector<permission_level>{{multisig, N(active)}},
+                            trx
+                    ));
+        }
+
+        //@abi action
+        void accept(account_name account, uint64_t key) {
+            deal_index deals(_self, scope_account);
+            auto it = deals.find(key);
+
+            eosio_assert(it != deals.end(), "No table entry for provided key");
+
+            dispatch_inline(
+                    N(eosio.msig),
+                    N(approve),
+                    std::vector<permission_level>{{account, N(active)}},
+                    std::make_tuple(
+                            it->initiator,
+                            it->proposal_name,
+                            std::vector<permission_level>{{account, N(active)}}
+                    ));
         }
 
     private:
@@ -96,15 +118,17 @@ namespace eoschat {
             std::string  conditions;
             account_name multisig;
             account_name escrow_agent;
+            name         proposal_name;
 
             uint64_t primary_key() const { return multisig; }
 
-            EOSLIB_SERIALIZE(deal_info, (initiator)(executor)(quantity)(conditions)(multisig)(escrow_agent))
+            EOSLIB_SERIALIZE(deal_info, (initiator)(executor)(quantity)(conditions)(multisig)(escrow_agent)(proposal_name))
         };
 
         typedef multi_index<N(deals), deal_info> deal_index;
 
         static const account_name scope_account = N(eoschat.deal);
+        static const uint64_t deal_proposal_duration = 60*60*24*30; //seconds = 30 days
     };
 
     EOSIO_ABI(deal, (init))
