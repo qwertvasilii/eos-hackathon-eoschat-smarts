@@ -4,9 +4,6 @@
 #include <eosiolib/currency.hpp>
 #include <eosiolib/action.hpp>
 #include <eosiolib/transaction.hpp>
-#include <string>
-#include <vector>
-
 namespace eoschat {
 
     using namespace eosio;
@@ -40,8 +37,6 @@ namespace eoschat {
             eosio_assert(executor     != multisig,     "Executor and multisig are identical");
             eosio_assert(escrow_agent != multisig,     "Escrow agent and multisig are identical");
 
-            //TODO multisig assertion
-
             eosio_assert(!conditions.empty(), "Conditions are empty");
 
             // transfer initiator's asset to multisig account
@@ -50,7 +45,7 @@ namespace eoschat {
                     N(eosio.token),
                     N(transfer),
                     currency::transfer{initiator, multisig, quantity, ""}
-                    );
+            );
             act.send();
 
             deal_index deals(_self, scope_account);
@@ -59,7 +54,15 @@ namespace eoschat {
             eosio_assert(it == deals.end(), "Multisig account reuse");
 
             action proposed_trx_action(
-                    permission_level{multisig, N(active)},
+                    std::vector<permission_level>{
+                            {initiator,    N(active)},
+                            {executor,     N(active)}
+                    },
+                    /*std::vector<permission_level>{
+                            {initiator,    N(active)},
+                            {executor,     N(active)},
+                            {escrow_agent, N(active)}
+                    },*/
                     N(eosio.token),
                     N(transfer),
                     currency::transfer{multisig, executor, quantity, ""});
@@ -86,15 +89,19 @@ namespace eoschat {
                     std::make_tuple(
                             initiator,
                             proposal_name,
-                            std::vector<permission_level>{{multisig, N(active)}},
+                            //std::vector<permission_level>{{multisig, N(active)}},
+                            std::vector<permission_level>{
+                                    {initiator,    N(active)},
+                                    {executor,     N(active)}
+                            },
                             trx
                     ));
 
-            require_auth(executor);
+            require_recipient(executor);
         }
 
         //@abi action
-        void accept(account_name account, uint64_t key) {
+        void accept(account_name account, account_name key) {
             require_auth(account);
 
             deal_index deals(_self, scope_account);
@@ -109,24 +116,26 @@ namespace eoschat {
                     std::make_tuple(
                             it->initiator,
                             it->proposal_name,
-                            std::vector<permission_level>{{account, N(active)}}
+                            permission_level{account, N(active)}
                     ));
 
-            dispatch_inline(
-                    N(eosio.msig),
-                    N(exec),
-                    std::vector<permission_level>{{account, N(active)}},
-                    std::make_tuple(
-                            it->initiator,
-                            it->proposal_name,
-                            account
-                    ));
+            if (account == it->initiator || account == it->escrow_agent) {
+                dispatch_inline(
+                        N(eosio.msig),
+                        N(exec),
+                        std::vector < permission_level > {{account, N(active)}},
+                        std::make_tuple(
+                                it->initiator,
+                                it->proposal_name,
+                                account
+                        ));
 
-            require_recipient(it->initiator, it->executor);
+                require_recipient(it->initiator, it->executor);
+            }
         }
 
         //@abi action
-        void dispute(account_name account, uint64_t key) {
+        void dispute(account_name account, account_name key) {
             require_auth(account);
 
             deal_index deals(_self, scope_account);
@@ -135,7 +144,7 @@ namespace eoschat {
             eosio_assert(it != deals.end(), "No table entry for provided key");
 
             if (account == it->executor) { //executor don't want to wait anymore
-                dispatch_inline(
+/*                dispatch_inline(
                         N(eoschat),
                         N(send),
                         std::vector<permission_level>{{_self, N(active)}},
@@ -143,7 +152,7 @@ namespace eoschat {
                                 _self,
                                 it->escrow_agent,
                                 "Executor started dispute"
-                        ));
+                        ));*/
             } else if (account == it->initiator) { //initiator wants his asset back
                 dispatch_inline(
                         N(eosio.msig),
@@ -190,7 +199,7 @@ namespace eoschat {
                                 std::vector<permission_level>{{account, N(active)}}
                         ));
 
-                dispatch_inline(
+/*                dispatch_inline(
                         N(eoschat),
                         N(send),
                         std::vector<permission_level>{{_self, N(active)}},
@@ -198,7 +207,7 @@ namespace eoschat {
                                 _self,
                                 it->escrow_agent,
                                 "Initiator started dispute"
-                        ));
+                        ));*/
             } else {
                 abort();
             }
@@ -207,7 +216,7 @@ namespace eoschat {
         }
 
         //@abi action
-        void choose(account_name agent, account_name winner, uint64_t key) {
+        void choose(account_name agent, account_name winner, account_name key) {
             require_auth(agent);
 
             deal_index deals(_self, scope_account);
@@ -228,6 +237,15 @@ namespace eoschat {
             require_recipient(winner);
         }
 
+        void clear(account_name key) {
+            require_auth(_self);
+
+            deal_index deals(_self, scope_account);
+            auto it = deals.find(key);
+            if (it != deals.end())
+                deals.erase(it);
+        }
+
     private:
         //@abi table deals
         struct deal_info {
@@ -239,7 +257,7 @@ namespace eoschat {
             account_name escrow_agent;
             name         proposal_name;
 
-            uint64_t primary_key() const { return multisig; }
+            account_name primary_key() const { return multisig; }
 
             EOSLIB_SERIALIZE(deal_info, (initiator)(executor)(quantity)(conditions)(multisig)(escrow_agent)(proposal_name))
         };
@@ -256,5 +274,8 @@ namespace eoschat {
         }
     };
 
-    EOSIO_ABI(deal, (init))
+    EOSIO_ABI(deal, (init)(accept)(dispute)(choose)(clear))
 }
+#include <string>
+
+#include <vector>
